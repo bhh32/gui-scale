@@ -6,7 +6,10 @@ pub fn get_tailscale_ip() -> String {
         .output()
         .unwrap();
 
-    String::from_utf8(ip_cmd.stdout).expect("Could get tailscale IPv4 address!")
+    match String::from_utf8(ip_cmd.stdout) {
+        Ok(ip) => ip,
+        Err(e) => format!("Could get tailscale IPv4 address!\n{e}"),
+    }
 }
 
 pub fn tailscale_int_up(up_down: bool, allow_ssh: bool, accept_routes: bool) -> bool {

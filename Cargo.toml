@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-cushy = "0.4.0"
+iced = "0.12.1"
