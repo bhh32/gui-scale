@@ -3,8 +3,11 @@ pub mod messages;
 mod  model;
 
 use model::GuiScale;
-use iced::{Sandbox, Settings};
+use iced::{Application, Settings, Size};
 
 fn main() -> iced::Result {
-    GuiScale::run(Settings::default())
+    let mut custom_settings = Settings::default();
+    custom_settings.window.size = Size::new(380.0, 200.0);
+    custom_settings.window.resizable = false;
+    GuiScale::run(custom_settings)
 }

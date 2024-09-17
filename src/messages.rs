@@ -4,5 +4,4 @@ pub enum TailscaleActions {
     Down,
     UseSSH(bool),
     AcceptRoutes(bool),
-    UseSshAndAcceptRoutes(bool, bool),
 }
