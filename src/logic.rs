@@ -1,4 +1,7 @@
-use std::{io::{Error, Stdin}, process::{Command, Output, Stdio}};
+use std::{
+    io::Error, 
+    process::{Command, Output, Stdio}
+};
 
 pub fn get_tailscale_ip() -> String {
     let ip_cmd = Command::new("tailscale")
