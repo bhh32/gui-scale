@@ -1,14 +1,17 @@
 use crate::messages::TailscaleActions;
 use crate::logic::{get_tailscale_con_status, get_tailscale_ip, get_tailscale_routes_status, get_tailscale_ssh_status, set_routes, set_ssh, tailscale_int_up};
-use iced::widget::{Button, Checkbox, Text};
+use iced::alignment::Horizontal;
+use iced::widget::container::Appearance;
+use iced::widget::{container, horizontal_space, vertical_space, text, Button, Checkbox, Text};
 use iced::{executor, Command};
 use iced::{
     widget::{
         button, column, row,
         Theme, Renderer
     },
+    theme::Container,
     Element,
-    Alignment::Center,
+    Alignment::{Start, Center, End},
     Application
 };
 
@@ -75,87 +78,102 @@ impl Application for GuiScale {
 
     /// Sets up and runs the frontend part of the application (GUI).
     fn view(&self) -> Element<TailscaleActions> {
-        // Text widget to hold the Tailscale IPv4 address of the running computer.
-        let tailscale_ip = Text::new(format!("Tailscale IPv4 Address: {}", get_tailscale_ip()));
-        
         // Bool to hold if Tailscale is currently connected or not.
         let connection_status = get_tailscale_con_status();
 
-        // Text widget to hold the status of the Tailscale connection based on the connection_status bool.
-        let con_status: Text<Theme, Renderer> = Text::new(match connection_status {
-            true => format!("Tailscale Connected"),
-            false => format!("Tailscale Not Connected")
-        });
-        
-        // Text widget to hold status of if SSH is enabled or not.
-        let ssh_status: Text<Theme, Renderer> = Text::new(match get_tailscale_ssh_status() {
-            true => format!("SSH is enabled"),
-            false => format!("SSH is disabled")
-        });
+        let statuses = container(
+            column![
+                text("Status Messages:"),
+                row![
+                    // Text widget to hold the Tailscale IPv4 address of the running computer.
+                    Text::new(format!("Tailscale IPv4 Address:\n{}", get_tailscale_ip())),
+                    horizontal_space(),
+                    // Text widget to hold the status of the Tailscale connection based on the connection_status bool.
+                    Text::new(match connection_status {
+                        true => format!("Tailscale Connected"),
+                        false => format!("Tailscale Not Connected")
+                    })
+                ]
+                .padding(5)
+                .align_items(Start),
+                row![
+                    // Text widget to hold status of if SSH is enabled or not.
+                    text({
+                        match get_tailscale_ssh_status() {
+                            true => format!("SSH is enabled"),
+                            false => format!("SSH is disabled")
+                        }
+                    }),
+                    horizontal_space(),
+                    // Text widget to hold the status of if routes are allowed or not.
+                    text({
+                        match get_tailscale_routes_status() {
+                            true => format!("Routes are allowed"),
+                            false => format!("Routes are disabled")
+                        }
+                    })
+                ]
+                .padding(5)
+                .align_items(Start)
+            ])
+            .align_x(Horizontal::Left)
+            .width(740.0 * 0.4)
+            .style(Container::Box);
 
-        // Checkbox widget to enable/disable SSH
-        let ssh_check: Checkbox<TailscaleActions, Theme, Renderer> = Checkbox::new("Enable SSH", self.use_ssh)
-            .on_toggle(|ssh| {
-                TailscaleActions::UseSSH(ssh)
-            });
-        
-        // Text widget to hold the status of if routes are allowed or not.
-        let routes_status: Text<Theme, Renderer> = Text::new(match get_tailscale_routes_status() {
-            true => format!("Routes are allowed"),
-            false => format!("Routes are disabled")
-        });
+        let checkbox_row = row![
+            // Checkbox widget to enable/disable SSH
+            Checkbox::new("Enable SSH", self.use_ssh)
+                .on_toggle(|ssh| {
+                    TailscaleActions::UseSSH(ssh)
+                }),
+            // Checkbox widget to enable/disable allowing routes.
+            Checkbox::new("Allow Routes", self.allow_routes)
+                .on_toggle(|routes| {
+                    TailscaleActions::AcceptRoutes(routes)
+                })
+        ]
+        .padding(5)
+        .spacing(60)
+        .align_items(Center);
 
-        // Checkbox widget to enable/disable allowing routes.
-        let allow_routes_check: Checkbox<TailscaleActions, Theme, Renderer> = Checkbox::new("Allow Routes", self.allow_routes)
-            .on_toggle(|routes| {
-                TailscaleActions::AcceptRoutes(routes)
-            });
-        
-        // Connect button, enabled if Tailscale is not connected; disabled if it is.
-        let up_btn: Button<TailscaleActions, Theme, Renderer> = if connection_status {
-            button("Connect to Tailscale").padding(5)
-        } else {
-            button("Connect to Tailscale")
-            .on_press(TailscaleActions::Up)
-            .padding(5)
-        };
+        let btn_row = row![
+            // Connect button, enabled if Tailscale is not connected; disabled if it is.
+            column![
+                if connection_status {
+                    button("Connect to Tailscale")
+                    .padding(7)
+                } else {
+                    button("Connect to Tailscale")
+                    .on_press(TailscaleActions::Up)
+                    .padding(7)
+                },
+            ].align_items(Start),
+            column![
+                // Disconnect button, enabled if Tailscale is connected, disabled if it is not.
+                if connection_status {
+                    button("Disconnect from Tailscale")
+                    .on_press(TailscaleActions::Down)
+                    .padding(7)
+                } else {
+                    button("Disconnect from Tailscale")
+                    .padding(7)
+                }
+            ].align_items(End),
+        ]
+        .padding(5)
+        .spacing(10);
 
-        // Disconnect button, enabled if Tailscale is connected, disabled if it is not.
-        let down_btn: Button<TailscaleActions, Theme, Renderer> = if connection_status {
-            button("Disconnect from Tailscale")
-            .on_press(TailscaleActions::Down)
-        } else {
-            button("Disconnect from Tailscale")
-        };
+        let controls = container(column![text("Controls:"), vertical_space(), checkbox_row, btn_row])
+            .align_x(Horizontal::Right)
+            .width(740.0 * 0.6);
 
         // Layout of the GUI in the window.
-        column![
-            tailscale_ip,
-            con_status,
-            row![
-                ssh_check,
-                allow_routes_check,
-            ]
+        container(row![statuses, horizontal_space(), controls]
             .spacing(10)
-            .padding(5)
-            .align_items(Center),
-            row![
-                up_btn,
-                down_btn,
-            ]
-            .spacing(2)
-            .padding(8)
-            .align_items(Center),
-            Text::new("Status Messages:"),
-            row![
-                ssh_status,
-                routes_status,
-            ]
-            .spacing(12)
-            .padding(8)
-            .align_items(Center),
-        ]
-        .align_items(Center)
+            .align_items(Center)
+        )
+        .padding(10)
+        .align_x(Horizontal::Center)
         .into()
     }
 }

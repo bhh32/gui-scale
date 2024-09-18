@@ -12,3 +12,7 @@ Cargo.lock
 
 # VSCode Directory
 .vscode/
+
+repo/
+.flatpak-builder/
+imgs/
