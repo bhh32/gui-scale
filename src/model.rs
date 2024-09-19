@@ -1,13 +1,12 @@
 use crate::messages::TailscaleActions;
 use crate::logic::{get_tailscale_con_status, get_tailscale_ip, get_tailscale_routes_status, get_tailscale_ssh_status, set_routes, set_ssh, tailscale_int_up};
 use iced::alignment::Horizontal;
-use iced::widget::container::Appearance;
-use iced::widget::{container, horizontal_space, vertical_space, text, Button, Checkbox, Text};
+use iced::widget::{container, horizontal_space, vertical_space, text, Checkbox, Text};
 use iced::{executor, Command};
 use iced::{
     widget::{
         button, column, row,
-        Theme, Renderer
+        Theme
     },
     theme::Container,
     Element,
