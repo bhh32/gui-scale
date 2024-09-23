@@ -1,7 +1,8 @@
-[package]
-name = "gui-scale"
-version = "0.1.0"
-edition = "2021"
+[workspace]
 
-[dependencies]
-iced = { version = "0.12.1", features = ["default", "image"] }
+members = [
+    "gui-scale-application",
+    "gui-scale-applet"
+, "cmd_lib"]
+
+resolver = "2"

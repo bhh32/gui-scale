@@ -1,6 +1,9 @@
 use crate::messages::TailscaleActions;
-use crate::logic::{get_tailscale_con_status, get_tailscale_ip, get_tailscale_routes_status, get_tailscale_ssh_status, set_routes, set_ssh, tailscale_int_up};
-use iced::alignment::Horizontal;
+use crate::logic::{
+    get_tailscale_con_status, get_tailscale_ip, get_tailscale_routes_status, 
+    get_tailscale_ssh_status, set_routes, set_ssh, tailscale_int_up,
+    get_available_devices,
+};
 use iced::widget::{container, horizontal_space, vertical_space, text, Checkbox, Text};
 use iced::{executor, Command};
 use iced::{
@@ -10,7 +13,11 @@ use iced::{
     },
     theme::Container,
     Element,
-    Alignment::{Start, Center, End},
+    alignment::{
+        Horizontal, 
+        Vertical, 
+        Alignment,
+    },
     Application
 };
 
@@ -94,7 +101,7 @@ impl Application for GuiScale {
                     })
                 ]
                 .padding(5)
-                .align_items(Start),
+                .align_items(Alignment::Start),
                 row![
                     // Text widget to hold status of if SSH is enabled or not.
                     text({
@@ -113,9 +120,10 @@ impl Application for GuiScale {
                     })
                 ]
                 .padding(5)
-                .align_items(Start)
+                .align_items(Alignment::Start)
             ])
             .align_x(Horizontal::Left)
+            .align_y(Vertical::Top)
             .width(740.0 * 0.4)
             .style(Container::Box);
 
@@ -133,7 +141,7 @@ impl Application for GuiScale {
         ]
         .padding(5)
         .spacing(60)
-        .align_items(Center);
+        .align_items(Alignment::Center);
 
         let btn_row = row![
             // Connect button, enabled if Tailscale is not connected; disabled if it is.
@@ -146,7 +154,7 @@ impl Application for GuiScale {
                     .on_press(TailscaleActions::Up)
                     .padding(7)
                 },
-            ].align_items(Start),
+            ].align_items(Alignment::Start),
             column![
                 // Disconnect button, enabled if Tailscale is connected, disabled if it is not.
                 if connection_status {
@@ -157,19 +165,26 @@ impl Application for GuiScale {
                     button("Disconnect from Tailscale")
                     .padding(7)
                 }
-            ].align_items(End),
+            ].align_items(Alignment::End),
         ]
         .padding(5)
         .spacing(10);
 
         let controls = container(column![text("Controls:"), vertical_space(), checkbox_row, btn_row])
             .align_x(Horizontal::Right)
+            .align_y(Vertical::Top)
             .width(740.0 * 0.6);
 
+        let avail = row![text(format!("{}", get_available_devices()))];
+
         // Layout of the GUI in the window.
-        container(row![statuses, horizontal_space(), controls]
-            .spacing(10)
-            .align_items(Center)
+        container(column![
+            row![statuses, horizontal_space(), controls]
+                .spacing(10)
+                .align_items(Alignment::Center),
+                row![],
+                avail,
+            ]
         )
         .padding(10)
         .align_x(Horizontal::Center)

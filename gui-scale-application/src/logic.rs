@@ -3,6 +3,7 @@ use std::{
     process::{Command, Output, Stdio}
 };
 
+/// Get the IPv4 address assigned to this computer.
 pub fn get_tailscale_ip() -> String {
     let ip_cmd = Command::new("tailscale")
         .args(["ip", "-4"])
@@ -15,6 +16,7 @@ pub fn get_tailscale_ip() -> String {
     }
 }
 
+/// Get Tailscale's connection status
 pub fn get_tailscale_con_status() -> bool {
     let con_cmd = Command::new("tailscale")
         .args(["debug", "prefs"])
@@ -35,6 +37,7 @@ pub fn get_tailscale_con_status() -> bool {
     false
 }
 
+/// Get the current status of the SSH enablement
 pub fn get_tailscale_ssh_status() -> bool {
     let ssh_cmd = Command::new("tailscale")
     .args(["debug", "prefs"])
@@ -55,6 +58,7 @@ pub fn get_tailscale_ssh_status() -> bool {
     false
 }
 
+/// Get the current status of the accept-routes enablement
 pub fn get_tailscale_routes_status() -> bool {
     let ssh_cmd = Command::new("tailscale")
     .args(["debug", "prefs"])
@@ -75,10 +79,17 @@ pub fn get_tailscale_routes_status() -> bool {
     false
 }
 
-pub fn get_tailscale_up_status() -> String {
-    todo!()
+/// Get available devices
+pub fn get_available_devices() -> String {
+    let cmd = Command::new("tailscale")
+        .args(["status", "--active"])
+        .output();
+
+
+    String::from_utf8(cmd.unwrap().stdout).unwrap()
 }
 
+/// Set the Tailscale connectio up/down
 pub fn tailscale_int_up(up_down: bool, allow_ssh: bool, accept_routes: bool) -> bool {
     let ssh_routes = (allow_ssh, accept_routes);
     let cmd: Result<Output, Error>;
@@ -116,6 +127,7 @@ pub fn tailscale_int_up(up_down: bool, allow_ssh: bool, accept_routes: bool) -> 
     }
 }
 
+/// Toggle SSH on/off
 pub fn set_ssh(ssh: bool) -> bool {
     let cmd: Result<Output, Error>;
     
@@ -138,6 +150,7 @@ pub fn set_ssh(ssh: bool) -> bool {
     }
 }
 
+/// Toggle accept-routes on/off
 pub fn set_routes(accept_routes: bool) -> bool {
     let cmd: Result<Output, Error>;
     
