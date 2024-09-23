@@ -8,6 +8,6 @@ Keywords=COSMIC;Iced;
 Icon=tailscale-icon
 StartupNotify=true
 NoDisplay=true
-X-Cosmic-Applet=true
+X-CosmicApplet=true
 X-CosmicHoverPopup=Start
 x-OverflowPriority=10
