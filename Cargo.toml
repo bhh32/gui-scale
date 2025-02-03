@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-iced = { version = "0.9", features = ["tokio", "smol"] }
+iced = { version = "0.13.1", features = ["tokio", "smol", "wgpu"] }
 
 # System notifications
 notify-rust = "4.5.0"

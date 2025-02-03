@@ -1,7 +1,6 @@
 pub mod tab_bar;
-use tab_bar::TabBarMessage;
 
-use iced::{Element, Renderer, Theme};
+use iced::Element;
 
 pub(crate) trait IsTab {
     fn new(title: impl Into<String>) -> Self;
@@ -46,8 +45,8 @@ impl IsTab for Tab {
 impl Tab {
     pub fn content<Message>(
         &self,
-        content: Element<'static, Message, Renderer<Theme>>,
-    ) -> Element<'static, Message, Renderer<Theme>> {
+        content: Element<'static, Message>,
+    ) -> Element<'static, Message> {
         content.into()
     }
 }

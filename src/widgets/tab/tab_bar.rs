@@ -1,6 +1,6 @@
 use super::IsTab;
 use iced::widget::{Button, Column, Row, Text};
-use iced::{Element, Renderer, Theme};
+use iced::{Element, Theme};
 
 #[derive(Debug, Clone)]
 pub enum TabBarMessage {
@@ -10,17 +10,17 @@ pub enum TabBarMessage {
 pub struct TabBar<T: IsTab, Message: Clone + 'static> {
     pub tabs: Vec<(
         T,
-        Box<dyn Fn() -> Element<'static, Message, Renderer<Theme>> + 'static>,
+        Box<dyn Fn() -> Element<'static, Message, Theme> + 'static>,
     )>,
 }
 
 impl<T: IsTab, Message: Clone + 'static> TabBar<T, Message> {
     pub fn new(
         default_tab: T,
-        default_tab_content: impl Fn() -> Element<'static, Message, Renderer<Theme>> + 'static,
+        default_tab_content: impl Fn() -> Element<'static, Message, Theme> + 'static,
     ) -> Self {
         let mut tabs = Vec::new();
-        let content_box: Box<dyn Fn() -> Element<'static, Message, Renderer<Theme>> + 'static> =
+        let content_box: Box<dyn Fn() -> Element<'static, Message, Theme> + 'static> =
             Box::new(default_tab_content);
         tabs.push((default_tab, content_box));
         Self { tabs }
@@ -29,12 +29,12 @@ impl<T: IsTab, Message: Clone + 'static> TabBar<T, Message> {
     pub fn push(
         &mut self,
         tab: T,
-        content: impl for<'a> Fn() -> Element<'static, Message, Renderer<Theme>> + 'static,
+        content: impl for<'a> Fn() -> Element<'static, Message> + 'static,
     ) {
         self.tabs.push((tab, Box::new(content)));
     }
 
-    pub fn view<F>(&self, on_select: F) -> Element<Message, Renderer<Theme>>
+    pub fn view<F>(&self, on_select: F) -> Element<Message>
     where
         F: Fn(String) -> Message + 'static + Copy,
         Message: Clone,

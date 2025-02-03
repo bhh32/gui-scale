@@ -7,9 +7,8 @@ use crate::{
     widgets::tab::Tab,
 };
 use iced::{
-    executor,
-    widget::{Button, Column, Container, ProgressBar, Row, Slider, Text, TextInput, Toggler},
-    Application, Command, Element, Length, Renderer, Settings, Theme,
+    widget::{button, column, container, row, text, text_input, Column, ProgressBar},
+    Element, Length, Theme,
 };
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -51,22 +50,15 @@ pub enum Message {
     TerminateSSH(String),
 }
 
-impl Application for Window {
-    type Executor = executor::Default;
-    type Flags = ();
-    type Theme = Theme;
-    type Message = Message;
-
-    fn new(_flags: Self::Flags) -> (Self, Command<Self::Message>) {
+impl Window {
+    pub fn new() -> Self {
         // Ensure that tailscale is installed
         check_tailscale();
         // Check for updates
-        check_for_updates();
+        //check_for_updates();
 
         let tabs = TabBar::<Tab, Message>::new(Tab::new("No Sessions"), || {
-            Column::new()
-                .push(Text::new("No active SSH sessions"))
-                .into()
+            column![text("No active SSH sessions")].into()
         });
 
         let active_ssh_sessions = Arc::new(Mutex::new(HashMap::new()));
@@ -82,7 +74,7 @@ impl Application for Window {
             *devices_lock = get_tailscale_devices();
         });
 
-        let app_window = Self {
+        Self {
             ssh_sessions: Arc::new(Mutex::new(HashMap::new())),
             ssh_input: HashMap::new(),
             active_ssh_sessions,
@@ -97,16 +89,10 @@ impl Application for Window {
             send_progress: 0.0,
             receive_progress: 0.0,
             active_tab: None,
-        };
-
-        (app_window, Command::none())
+        }
     }
 
-    fn title(&self) -> String {
-        String::from("GUI Scale")
-    }
-
-    fn update(&mut self, message: Self::Message) -> Command<Self::Message> {
+    pub fn update(&mut self, message: Message) {
         match message {
             Message::ConnectSSH(device, ip) => {
                 run_ssh_session(device.clone(), ip);
@@ -122,23 +108,19 @@ impl Application for Window {
                 self.tabs.push(Tab::new(&device.clone()), move || {
                     let device_ref = device_clone.clone();
                     let device_send = device_clone.clone();
-                    Column::new()
-                        .push(Text::new(format!("SSH Session: {}", device_ref)))
-                        .push(
-                            TextInput::new(
-                                "Enter command...",
-                                ssh_input.get(&device_ref).unwrap_or(&String::new()),
-                            )
-                            .on_input(move |input| {
-                                let device_input = device_ref.clone();
-                                Message::UpdateSSHInput(device_input, input)
-                            }),
+                    column![
+                        text(format!("SSH Session: {}", device_ref)),
+                        text_input(
+                            "Enter command...",
+                            ssh_input.get(&device_ref).unwrap_or(&String::new()),
                         )
-                        .push(
-                            Button::new(Text::new("Send"))
-                                .on_press(Message::SendSSHCommand(device_send)),
-                        )
-                        .into()
+                        .on_input(move |input| {
+                            let device_input = device_ref.clone();
+                            Message::UpdateSSHInput(device_input, input)
+                        }),
+                        button(text("Send")).on_press(Message::SendSSHCommand(device_send))
+                    ]
+                    .into()
                 });
             }
             Message::SendSSHCommand(device) => {
@@ -189,35 +171,29 @@ impl Application for Window {
                 check_for_updates();
             }
         }
-
-        Command::none()
     }
 
-    fn view(&self) -> Element<Self::Message> {
+    pub fn view(&self) -> Element<Message, Theme> {
         let devices_lock = self.devices.lock().unwrap();
-        let device_list = devices_lock.iter().enumerate().fold(
-            Column::new().spacing(10),
-            |column, (_index, device)| {
-                let progress = ProgressBar::new(0.0..=1.0, self.send_progress);
-
-                let send_button =
-                    Button::new(Text::new("Send")).on_press(Message::FileTransfer(device.clone()));
-
-                let ssh_button = Button::new(Text::new("Connect")).on_press(Message::ConnectSSH(
-                    device.clone(),
-                    "tailscale-ip".to_string(),
-                ));
-
-                column.push(
-                    Row::new()
-                        .push(Text::new(device.clone()).size(16))
-                        .push(progress)
-                        .push(send_button)
-                        .push(ssh_button)
-                        .spacing(10),
-                )
-            },
-        );
+        let device_list: Element<Message, Theme> = {
+            // Create a row for each device
+            let rows = devices_lock.iter().map(|device| {
+                row![
+                    text(device.clone()).size(16),
+                    ProgressBar::new(0.0..=1.0, self.send_progress),
+                    button(text("Send")).on_press(Message::FileTransfer(device.clone())),
+                    button(text("Connect")).on_press(Message::ConnectSSH(
+                        device.clone(),
+                        "tailscale-ip".to_string(),
+                    ))
+                ]
+                .spacing(10)
+                .padding(5)
+                .into()
+            });
+            column(rows).spacing(10).padding(20)
+        }
+        .into();
 
         let active_sessions = self.active_ssh_sessions.lock().unwrap();
         let active_sessions_vec: Vec<_> = active_sessions.keys().cloned().collect();
@@ -227,12 +203,12 @@ impl Application for Window {
             let first_device_owned = first_device.to_string();
             let first_device_ref = first_device_owned.clone();
             let ssh_input = self.ssh_input.clone();
-            let mut tabs = TabBar::<_, Message>::new(Tab::new(&first_device_owned), move || {
-                let device_clone = first_device_ref.clone();
-                let content = Column::new()
-                    .push(Text::new(format!("SSH Session: {}", device_clone)))
-                    .push(
-                        TextInput::new(
+            let mut tabs: TabBar<Tab, Message> =
+                TabBar::<_, Message>::new(Tab::new(&first_device_owned), move || {
+                    let device_clone = first_device_ref.clone();
+                    let content: Column<Message> = column![
+                        text(format!("SSH Session: {}", device_clone)),
+                        text_input(
                             "Enter command...",
                             ssh_input.get(&device_clone).unwrap_or(&String::new()),
                         )
@@ -240,25 +216,39 @@ impl Application for Window {
                             let device_clone = device_clone.clone();
                             move |input| Message::UpdateSSHInput(device_clone.clone(), input)
                         }),
-                    )
-                    .push(
-                        Button::new(Text::new("Send"))
-                            .on_press(Message::SendSSHCommand(device_clone.clone())),
-                    );
+                        button(button("Send"))
+                            .on_press(Message::SendSSHCommand(device_clone.clone()))
+                    ];
 
-                content.into()
-            });
+                    content.into()
+                })
+                .into();
         };
+        // Main container
+        container(
+            column![
+                // Title section
+                container(text("GUI Scale").size(24))
+                    .padding(20)
+                    .center_x(Length::Fill),
+                // Devices section
+                container(column![text("Devices").size(20), device_list].spacing(10)).padding(10),
+                // Tabs section
+                container(self.tabs.view(Message::SwitchTab)).padding(10),
+                // Settings section
+                container(column![row![text("Font Size:").size(16)].padding(10)]).padding(10)
+            ]
+            .spacing(20),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .into()
+    }
+}
 
-        // Additional tabs
-
-        let settings_section = Column::new().push(Row::new().push(Text::new("Font Size:")));
-        let view = self.tabs.view(Message::SwitchTab);
-
-        Column::new()
-            .push(device_list)
-            .push(view)
-            .push(settings_section)
-            .into()
+impl Default for Window {
+    fn default() -> Self {
+        Window::new()
     }
 }
