@@ -1,0 +1,33 @@
+[package]
+name = "gui-scale"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+iced = { version = "0.9", features = ["tokio", "smol"] }
+
+# System notifications
+notify-rust = "4.5.0"
+
+# Sound alerts
+rodio = "0.17"
+
+# JSON serialization and config management
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Process & Shell execution
+lazy_static = "1.4"
+tokio = { version = "1", features = ["full"] }
+
+# self updating
+self_update = "0.38.0"
+
+# System Tray support
+#tray-item = "0.8"
+
+#[build-dependencies]
+#cross = "0.2.5"
+
+[profile.release]
+opt-level = 3
