@@ -22,6 +22,8 @@ tokio = { version = "1", features = ["full"] }
 
 # self updating
 self_update = "0.38.0"
+iced_core = "0.13.2"
+native-dialog = "0.7.0"
 
 # System Tray support
 #tray-item = "0.8"

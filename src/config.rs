@@ -3,14 +3,48 @@ use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug)]
 pub struct UIConfig {
-    pub font_size: u16,
-    pub theme: String,
+    // Basic Settings
+    pub font_size: u16, // range: 10 - 24
+    pub theme: String,  // "system", "light", or "dark"
     pub window_width: u32,
     pub window_height: u32,
-    pub enable_notifications: bool,
-    pub enable_sounds: bool,
+    pub enable_notifications: bool, // Master notifications toggle
+    pub enable_sounds: bool,        // Master sounds toggle
+
+    // Tailscale related toggles
+    pub ssh_enabled: bool,    // "tailscale up --ssh=true/false"
+    pub accept_routes: bool,  // "tailscale up --accept-routes=true/false"
+    pub is_exit_node: bool,   // "tailscale up --advertise-exit-node=true/false"
+    pub use_exit_node: bool,  // "tailscale up --exit-node=exit-node-name"
+    pub connect_to_lan: bool, // "tailscale up --exit-node-allow-lan-access=true/false"
+
+    // Auto-receive file toggles
+    pub auto_receive_files: bool, // Automatically receive files from other devices
+    // Whether to disable notifications for received files
+    // NOTE: If auto_receive is disabled, we cannot disable these notifications
+    pub disable_received_file_notifications: bool,
+}
+
+impl Default for UIConfig {
+    fn default() -> Self {
+        Self {
+            font_size: 14,
+            theme: "system".to_string(),
+            window_width: 1024,
+            window_height: 768,
+            enable_notifications: true,
+            enable_sounds: true,
+            ssh_enabled: false, // Should be automatically set based on what is currently set
+            accept_routes: false, // Should be automatically set based on what's currently set
+            is_exit_node: false, // Should be automatically set based on what's currently set
+            use_exit_node: false, // Should be automatically set based on what's currently set
+            connect_to_lan: false, // Should be automatically set based on what's currently set
+            auto_receive_files: true,
+            disable_received_file_notifications: false,
+        }
+    }
 }
 
 impl UIConfig {
@@ -43,7 +77,7 @@ impl UIConfig {
             }
 
             match serde_json::from_str(&contents) {
-                Ok(contents) => Ok(contents),
+                Ok(cfg) => Ok(cfg),
                 Err(e) => return Err(e),
             }
         } else {
