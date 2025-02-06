@@ -1,7 +1,7 @@
 use super::IsTab;
-use iced::{
-    widget::{button, column, row, text, Column, Row},
-    Element, Theme,
+use cosmic::{
+    widget::{button, Column, Row},
+    Element
 };
 
 #[derive(Debug, Clone)]
@@ -13,17 +13,17 @@ pub enum TabBarMessage {
 pub struct TabBar<T: IsTab, Message: Clone + 'static> {
     pub tabs: Vec<(
         T,
-        Box<dyn Fn() -> Element<'static, Message, Theme> + 'static>,
+        Box<dyn Fn() -> Element<'static, Message> + 'static>,
     )>,
 }
 
 impl<T: IsTab, Message: Clone + 'static> TabBar<T, Message> {
     pub fn new(
         default_tab: T,
-        default_tab_content: impl Fn() -> Element<'static, Message, Theme> + 'static,
+        default_tab_content: impl Fn() -> Element<'static, Message> + 'static,
     ) -> Self {
         let mut tabs = Vec::new();
-        let content_box: Box<dyn Fn() -> Element<'static, Message, Theme> + 'static> =
+        let content_box: Box<dyn Fn() -> Element<'static, Message> + 'static> =
             Box::new(default_tab_content);
         tabs.push((default_tab, content_box));
         Self { tabs }
@@ -35,13 +35,13 @@ impl<T: IsTab, Message: Clone + 'static> TabBar<T, Message> {
         tab: T,
         content: impl for<'a> Fn() -> Element<'static, Message> + 'static,
     ) {
-        let content_box: Box<dyn Fn() -> Element<'static, Message, Theme> + 'static> =
+        let content_box: Box<dyn Fn() -> Element<'static, Message> + 'static> =
             Box::new(content);
         self.tabs.push((tab, content_box));
     }
 
     /// View the TabBar as an Element
-    pub fn view<F>(&self, on_select: F) -> Element<Message, Theme>
+    pub fn view<F>(&self, on_select: F) -> Element<Message>
     where
         F: Fn(String) -> Message + 'static + Copy,
         Message: Clone,
@@ -52,7 +52,7 @@ impl<T: IsTab, Message: Clone + 'static> TabBar<T, Message> {
         let mut button_row = Row::new().spacing(10);
         for (tab, _) in &self.tabs {
             let label = tab.title();
-            button_row = button_row.push(button(text(label)).on_press(on_select(tab.title())));
+            button_row = button_row.push(button::standard(label).on_press(on_select(tab.title())));
         }
         column = column.push(button_row);
 

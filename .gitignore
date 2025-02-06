@@ -1,6 +1,5 @@
-bin/
-go.sum
-
 # Added by cargo
 
 /target
+/icons
+/screenshots

@@ -5,6 +5,8 @@ mod window;
 
 use crate::window::Window;
 
-fn main() -> iced::Result {
-    iced::run("GUI Scale", Window::update, Window::view)
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    cosmic::app::run::<Window>(cosmic::app::Settings::default(), ())?;
+
+    Ok(())
 }

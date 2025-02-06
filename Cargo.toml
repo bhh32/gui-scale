@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-iced = { version = "0.13.1", features = ["tokio", "smol", "wgpu"] }
+#iced = { version = "0.13.1", features = ["tokio", "smol", "wgpu", "image"] }
+libcosmic = { git = "https://github.com/pop-os/libcosmic.git", features = ["tokio", "desktop", "winit"] }
 
 # System notifications
 notify-rust = "4.5.0"

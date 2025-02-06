@@ -14,10 +14,29 @@ const REPO_OWNER: &str = "bhh32";
 const REPO_NAME: &str = "gui-scale";
 
 /// Store Tailscale status information
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct TailscaleStatus {
     pub connected: bool,
     pub tailscale_ip: Option<String>,
+    pub ssh_enabled: bool,
+    pub routes: bool,
+    pub allow_lan: bool,
+    pub is_exit_node: bool,
+    pub use_exit_node: bool,
+}
+
+impl Default for TailscaleStatus {
+    fn default() -> Self {
+        Self {
+            connected: false,
+            tailscale_ip: None,
+            ssh_enabled: false,
+            routes: false,
+            allow_lan: false,
+            is_exit_node: false,
+            use_exit_node: false,
+        }
+    }
 }
 
 // Active SSH process store
@@ -55,8 +74,8 @@ pub fn check_tailscale() {
 // Tailscale Commands
 
 /// Return Tailscale devices from "tailscale status"
-/// - each line of output is returned as a device entry for the GUI
-pub fn get_tailscale_devices() -> Vec<String> {
+/// - each line of output is returned as a tuple of (device_name, username, tailscale_ip)
+pub fn get_tailscale_devices() -> Vec<(String, String, String)> {
     let output = match Command::new("tailscale").arg("status").output() {
         Ok(o) => o,
         Err(e) => {
@@ -66,7 +85,26 @@ pub fn get_tailscale_devices() -> Vec<String> {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.lines().map(|line| line.to_owned()).collect()
+    
+    stdout
+        .lines()
+        .filter_map(|line| {
+            // Skip header lines
+            if line.is_empty() || line.contains("Tailscale") {
+                return None;
+            }
+
+            // Split the line into parts
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            
+            // Ensure we have at least 3 parts (IP, device_name, username)
+            if parts.len() >= 3 {
+                Some((parts[1].to_string(), parts[2].to_string(), parts[0].to_string()))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 /// Connect, disconnect, or reconfigure Tailscale
@@ -114,28 +152,66 @@ pub fn tailscale_down() {
     let _ = Command::new("tailscale").args(["down"]).output();
 }
 
-/// Attempt to parse Tailscale status to see if connected and get an IP
-pub fn get_tailscale_status() -> TailscaleStatus {
-    let output = Command::new("tailscale").arg("ip").output();
+/// Attempt to parse Tailscale status information
+pub fn get_tailscale_status() -> TailscaleStatus{
+    let mut ts_status = TailscaleStatus::default();
+    // Use `tailscale ip -4` command to get the IPv4 address
+    let ip_output = Command::new("tailscale")
+        .args(["ip", "-4"])
+        .output()
+        .unwrap();
 
-    if let Ok(out) = output {
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        let lines: Vec<&str> = stdout.lines().collect();
+    // Set the IP if we can parse it
+    match String::from_utf8(ip_output.stdout) {
+        Ok(ip) => ts_status.tailscale_ip = Some(ip.trim().to_string()),
+        Err(_) => ts_status.tailscale_ip = None,
+    };
 
-        if !lines.is_empty() {
-            let ip = lines[0].to_string();
-            return TailscaleStatus {
-                connected: true,
-                tailscale_ip: Some(ip),
-            };
+    // Use `tailscale debug prefs` to check if we're connected
+    let status_cmd = Command::new("tailscale")
+        .args(["debug", "prefs"])
+        .output()
+        .unwrap();
+
+    // Convert the output to a String so it can be filtered
+    let status_output = String::from_utf8(status_cmd.stdout).unwrap();
+    // Filter the output to find the "WantRunning" line and check if it's true
+    let status_test_vec: Vec<String> = status_output
+        .lines()
+        .filter(|line| {
+            ((line.contains("WantRunning") || 
+            line.contains("RunSSH") ||
+            line.contains("RouteAll")) && line.contains("true")) ||
+            line.contains("AdvertiseRoutes") && !line.contains("null")
+        })
+        .map(|line| line.to_string()).collect();
+    
+    match status_test_vec.len() {
+        4 => {
+            ts_status.connected = true;
+            ts_status.ssh_enabled = true;
+            ts_status.routes = true;
+            ts_status.is_exit_node = true;
+        }
+        _ => {
+            for line in status_test_vec.iter() {
+                if line.contains("WantRunning") && !ts_status.connected {
+                    ts_status.connected = true;
+                } else if line.contains("RunSSH") && !ts_status.ssh_enabled {
+                    ts_status.ssh_enabled = true;
+                } else if line.contains("RouteAll") && !ts_status.routes {
+                    ts_status.routes = true;
+                } else if line.contains("AdvertiseRoutes") && !ts_status.is_exit_node {
+                    ts_status.is_exit_node = true;
+                }
+            }
         }
     }
-    // If we get here, likely not connected
-    TailscaleStatus {
-        connected: false,
-        tailscale_ip: None,
-    }
+
+    ts_status
 }
+
+
 
 /// Use Tailscale CLI to send one or more files to a device
 pub fn tailscale_send(files: Vec<String>, device: &str) -> Vec<Option<String>> {

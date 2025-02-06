@@ -1,6 +1,6 @@
 pub mod tab_bar;
 
-use iced::Element;
+use cosmic::Element;
 
 pub(crate) trait IsTab {
     fn new(title: impl Into<String>) -> Self;
