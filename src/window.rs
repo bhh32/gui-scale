@@ -5,22 +5,63 @@ use crate::{
         play_sound, run_ssh_session, send_ssh_command, tailscale_down, tailscale_recieve,
         tailscale_send, tailscale_up, terminate_ssh_session,
     },
-    widgets::tab::{tab_bar::TabBar, IsTab, Tab},
+    widgets::{
+        ssh_terminal::SshTerminal,
+        tab::{tab_bar::TabBar, IsTab, Tab},
+    },
 };
-use cosmic::{cosmic_config::Config, iced::{Alignment::{self, Center, End}, Length}, iced_widget::text_input, widget::{image::Handle, scrollable}, Element, Renderer, Theme};
-use cosmic::iced::Length::{Fill, FillPortion, Fixed, Shrink};
 use cosmic::app::{Core, Settings, Task};
+use cosmic::iced::Length::{Fill, FillPortion, Fixed, Shrink};
 use cosmic::widget::{
-        button, container, dropdown, column, Column, row, slider, text, toggler, Image,
+    button, column, container, dropdown, row, slider, text, toggler, Column, Image,
+};
+use cosmic::{
+    cosmic_config::Config,
+    iced::{
+        Alignment::{self, Center, End},
+        Length,
+    },
+    iced_widget::text_input,
+    widget::{image::Handle, scrollable},
+    Element, Renderer, Theme,
+};
+use crossterm::{
+    cursor, execute,
+    style::{Color, ResetColor, SetForegroundColor},
+    terminal::{disable_raw_mode, Clear, ClearType},
 };
 use native_dialog::FileDialog;
+use nix::sys::signal::{self, Signal};
+use nix::unistd::Pid;
+use once_cell::sync::Lazy;
+use std::sync::mpsc;
+use std::sync::mpsc::{Receiver, Sender};
 use std::{
     collections::HashMap,
+    io::{stdout, Result as IoResult, Write},
+    process::Command,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
-    process::Command,
 };
+
+pub static GLOBAL_MESSAGE_SENDER: Lazy<mpsc::Sender<Message>> = Lazy::new(|| {
+    let (tx, rx) = mpsc::channel();
+
+    // Spawn a thread to handle incoming messages
+    std::thread::spawn(move || {
+        while let Ok(message) = rx.recv() {
+            match message {
+                Message::SSHTerminalOutput { device, output } => {
+                    println!("Terminal output for {}: {}", device, output);
+                }
+                _ => {}
+            }
+        }
+    });
+
+    tx
+});
 
 const ID: &str = "com.bhh32.gui-scale";
 const CONFIG_VERS: u64 = 1;
@@ -82,6 +123,7 @@ pub struct Window {
     pub devices: Arc<Mutex<Vec<(String, String, String)>>>,
 
     // We store the "exit node" device list separately.
+    // TODO: Implement getting exit nodes from Tailscale
     pub exit_nodes: Arc<Mutex<Vec<String>>>,
 
     // For file sending
@@ -96,11 +138,74 @@ pub struct Window {
 #[derive(Debug, Clone)]
 pub struct SSHSession {
     pub device_name: String,
-    /// For display output, we could keep a buffer that we fill from the child process's
-    /// stout in real-time. For brevity, we'll just store the lines:
-    pub output_lines: Vec<String>,
     /// Whether this session is currently active
     pub active: bool,
+    /// Process ID of the SSH session
+    pub pid: Option<u32>,
+    /// Terminal input/output channels
+    pub terminal: Option<SshTerminal>,
+    pub stdin_tx: Option<Sender<String>>,
+}
+
+impl SSHSession {
+    /// Initialize a new crossterm terminal for this SSH session
+    pub fn init_terminal(&mut self) -> IoResult<()> {
+        // Create a new terminal
+        let mut stdout = stdout();
+
+        // Clear the screen
+        execute!(stdout, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+
+        // Set up the terminal
+        crossterm::terminal::enable_raw_mode()?;
+
+        // Write initial connection message
+        execute!(stdout, SetForegroundColor(Color::Blue))?;
+        writeln!(stdout, "Connected to {} via SSH", self.device_name)?;
+        execute!(stdout, ResetColor)?;
+        stdout.flush()?;
+
+        Ok(())
+    }
+
+    /// Write a line to the SSH terminal
+    pub fn write_line(&mut self, line: &str) -> IoResult<()> {
+        // Access terminal if it exists
+        if let Some(terminal) = &mut self.terminal {
+            let mut stdout = stdout();
+
+            // Set color based on error status
+            let color = if line.starts_with("Error:") {
+                Color::Red
+            } else {
+                Color::Green
+            };
+
+            // Write the line with appropriate color
+            execute!(stdout, SetForegroundColor(color))?;
+            writeln!(stdout, "{}", line)?;
+            execute!(stdout, ResetColor)?;
+
+            stdout.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Clear the terminal
+    pub fn clear_terminal(&mut self) -> IoResult<()> {
+        let mut stdout = stdout();
+        execute!(stdout, Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+        stdout.flush()?;
+        Ok(())
+    }
+
+    /// Cleanup terminal resources
+    pub fn cleanup_terminal(&mut self) -> IoResult<()> {
+        if let Some(terminal) = &self.terminal {
+            crossterm::terminal::disable_raw_mode()?;
+        }
+        Ok(())
+    }
 }
 
 /// The messages that can be sent around in the UI
@@ -133,6 +238,14 @@ pub enum Message {
 
     // SSH Sessions
     OpenSSHSession(String, String), // device, IP
+    SSHTerminalOutput {
+        device: String,
+        output: String,
+    },
+    SSHTerminalInput {
+        device: String,
+        input: String,
+    },
     UpdateSSHInput(String, String), // device, typed command
     SendSSHCommand(String),         // device
     CloseSSHSession(String),        // device
@@ -142,6 +255,13 @@ pub enum Message {
 
     // For continuing local logic
     Tick,
+
+    // New message to handle SSH output
+    SSHSessionOutput {
+        device: String,
+        output: String,
+        is_error: bool,
+    },
 }
 
 impl cosmic::Application for Window {
@@ -212,15 +332,39 @@ impl cosmic::Application for Window {
 
         // Update the config with the current status
         // This is done just in case the CLI was ran without the GUI
-        update_config(&window.config, "ipv4", match window.tailscale_status.tailscale_ip.clone() {
-            Some(ip) => ip,
-            None => "".to_string(),
-        });
-        update_config(&window.config, "connected", window.tailscale_status.connected.clone());
-        update_config(&window.config, "ssh_enabled", window.tailscale_status.ssh_enabled.clone());
-        update_config(&window.config, "routes", window.tailscale_status.routes.clone());
-        update_config(&window.config, "allow_lan", window.tailscale_status.allow_lan.clone());
-        update_config(&window.config, "is_exit_node", window.tailscale_status.is_exit_node.clone());
+        update_config(
+            &window.config,
+            "ipv4",
+            match window.tailscale_status.tailscale_ip.clone() {
+                Some(ip) => ip,
+                None => "".to_string(),
+            },
+        );
+        update_config(
+            &window.config,
+            "connected",
+            window.tailscale_status.connected.clone(),
+        );
+        update_config(
+            &window.config,
+            "ssh_enabled",
+            window.tailscale_status.ssh_enabled.clone(),
+        );
+        update_config(
+            &window.config,
+            "routes",
+            window.tailscale_status.routes.clone(),
+        );
+        update_config(
+            &window.config,
+            "allow_lan",
+            window.tailscale_status.allow_lan.clone(),
+        );
+        update_config(
+            &window.config,
+            "is_exit_node",
+            window.tailscale_status.is_exit_node.clone(),
+        );
 
         // Update the UI config with previous closed settings
         window.ui_config = UIConfig::load().unwrap_or_default();
@@ -388,12 +532,23 @@ impl cosmic::Application for Window {
                 };
 
                 match self.ui_config.theme.as_str() {
-                    "system" => self.system_theme_update(&["system", "light", "dark"], cosmic::Theme::cosmic(&cosmic::Theme::default())),
-                    "light" => self.system_theme_update(&["system", "light", "dark"], cosmic::Theme::cosmic(&cosmic::Theme::light())),
-                    "dark" => self.system_theme_update(&["system", "light", "dark"], cosmic::Theme::cosmic(&cosmic::Theme::dark())),
-                    _ => self.system_theme_update(&["system", "light", "dark"], cosmic::Theme::cosmic(&cosmic::Theme::default())),
+                    "system" => self.system_theme_update(
+                        &["system", "light", "dark"],
+                        cosmic::Theme::cosmic(&cosmic::Theme::default()),
+                    ),
+                    "light" => self.system_theme_update(
+                        &["system", "light", "dark"],
+                        cosmic::Theme::cosmic(&cosmic::Theme::light()),
+                    ),
+                    "dark" => self.system_theme_update(
+                        &["system", "light", "dark"],
+                        cosmic::Theme::cosmic(&cosmic::Theme::dark()),
+                    ),
+                    _ => self.system_theme_update(
+                        &["system", "light", "dark"],
+                        cosmic::Theme::cosmic(&cosmic::Theme::default()),
+                    ),
                 };
-                
             }
             Message::ToggleNotifications(enabled) => {
                 self.ui_config.enable_notifications = enabled;
@@ -432,47 +587,64 @@ impl cosmic::Application for Window {
 
             // SSH Sessions
             Message::OpenSSHSession(device, ip) => {
-                // Create a new tab at the bottom
-                // Start the session
-                run_ssh_session(device.clone(), ip.clone());
-                // Add a new session to our vec
+                let (pid, stdin_tx, stdout_rx) = run_ssh_session(&device, ip.clone());
+
+                let mut terminal = SshTerminal::new(device.clone());
+                terminal.start(stdout_rx);
+
                 let sesh = SSHSession {
                     device_name: device.clone(),
-                    output_lines: vec![format!("Connected to {device} at {ip}")],
                     active: true,
+                    pid: Some(pid),
+                    terminal: Some(terminal),
+                    stdin_tx: Some(stdin_tx),
                 };
-                self.ssh_sessions.push(sesh);
 
-                // Initialize input buffer
-                self.ssh_input.insert(device.clone(), "".to_string());
+                self.ssh_sessions.push(sesh);
+                self.ssh_input.insert(device.clone(), String::new());
             }
             Message::UpdateSSHInput(device, typed) => {
                 self.ssh_input.insert(device, typed);
             }
             Message::SendSSHCommand(device) => {
-                if let Some(cmd) = self.ssh_input.get(&device).cloned() {
-                    send_ssh_command(device.clone(), cmd.clone());
-
-                    // Potentially append to session's output buffer
-                    if let Some(sesh) = self
-                        .ssh_sessions
-                        .iter_mut()
-                        .find(|s| s.device_name == device)
-                    {
-                        sesh.output_lines.push(format!("> {cmd}"));
+                if let Some(command) = self.ssh_input.get(&device).cloned() {
+                    if !command.trim().is_empty() {
+                        if let Some(sesh) = self
+                            .ssh_sessions
+                            .iter_mut()
+                            .find(|ssh_sesh| ssh_sesh.device_name == device)
+                        {
+                            if let Some(tx) = &sesh.stdin_tx {
+                                let _ = tx.send(command.clone());
+                            }
+                        }
                     }
-
-                    // Clear input
-                    self.ssh_input.insert(device, "".to_string());
+                    // Clear input after sending
+                    self.ssh_input.insert(device, String::new());
                 }
             }
             Message::CloseSSHSession(device_name) => {
-                // Remove the first SSH session (or the specified one if found)
-                if let Some(index) = self.ssh_sessions.iter().position(|s| s.device_name == device_name) {
-                    self.ssh_sessions.remove(index);
+                if let Some(index) = self
+                    .ssh_sessions
+                    .iter()
+                    .position(|sesh| sesh.device_name == device_name)
+                {
+                    let session = self.ssh_sessions.remove(index);
+                    if let Some(pid) = session.pid {
+                        // Terminate the SSH process
+                        match signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
+                            Ok(_) => println!("Terminated SSH Session for {device_name}"),
+                            Err(e) => {
+                                eprintln!("Failed to terminate SSH session for {device_name}: {e}")
+                            }
+                        }
+                    }
+
+                    // Clean up the terminal
+                    if let Some(mut terminal) = session.terminal {
+                        disable_raw_mode().unwrap();
+                    }
                 }
-                // Remove the corresponding input if it exists
-                self.ssh_input.remove(&device_name);
             }
             Message::SwitchTab(tab_name) => {
                 self.active_tab = tab_name;
@@ -480,15 +652,53 @@ impl cosmic::Application for Window {
             Message::Tick => {
                 // If we want to do any periodic updates, do them here
             }
+            Message::SSHSessionOutput {
+                device,
+                output,
+                is_error,
+            } => {}
+            Message::SSHTerminalOutput { device, output } => {
+                if let Some(sesh) = self
+                    .ssh_sessions
+                    .iter_mut()
+                    .find(|ssh_sesh| ssh_sesh.device_name == device)
+                {
+                    if let Some(terminal) = &mut sesh.terminal {
+                        terminal.content.push(output.clone());
+                    }
+                }
+            }
+            Message::SSHTerminalInput { device, input } => todo!(),
         }
 
         // Attempt to save configs each time we make a change
-        update_config(&self.config, "connected", &self.tailscale_status.connected.clone());
-        update_config(&self.config, "ssh_enabled", &self.tailscale_status.ssh_enabled.clone());
-        update_config(&&self.config, "routes", &self.tailscale_status.routes.clone());
-        update_config(&&self.config, "allow_lan", &self.tailscale_status.allow_lan.clone());
-        update_config(&&self.config, "is_exit_node", &self.tailscale_status.is_exit_node.clone());
+        update_config(
+            &self.config,
+            "connected",
+            &self.tailscale_status.connected.clone(),
+        );
+        update_config(
+            &&self.config,
+            "ssh_enabled",
+            &self.tailscale_status.ssh_enabled.clone(),
+        );
+        update_config(
+            &&self.config,
+            "routes",
+            &self.tailscale_status.routes.clone(),
+        );
+        update_config(
+            &&self.config,
+            "allow_lan",
+            &self.tailscale_status.allow_lan.clone(),
+        );
+        update_config(
+            &&self.config,
+            "is_exit_node",
+            &self.tailscale_status.is_exit_node.clone(),
+        );
         let _ = self.ui_config.save();
+
         Task::none()
     }
 
@@ -501,10 +711,7 @@ impl cosmic::Application for Window {
             "Settings" => self.view_settings_tab(),
             "Active Sessions" => self.active_sessions_view(),
             _ => Column::new()
-                .push(
-                    text("Select a tab to view content")
-                        .size(self.ui_config.font_size)
-                )
+                .push(text("Select a tab to view content").size(self.ui_config.font_size))
                 .into(),
         };
 
@@ -515,7 +722,7 @@ impl cosmic::Application for Window {
                 container(content)
                     .width(Length::Fill)
                     .height(Length::Fill)
-                    .padding(10)
+                    .padding(10),
             )
             .push(
                 // Always show SSH sessions at the bottom, but make it collapsible
@@ -524,13 +731,10 @@ impl cosmic::Application for Window {
                         .push(
                             row::row()
                                 .push(text("SSH Sessions").size(self.ui_config.font_size))
-                                .push(
-                                    button::standard("Close")
-                                        .on_press(Message::CloseSSHSession(
-                                            self.ssh_sessions.first().unwrap().device_name.clone()
-                                        ))
-                                )
-                                .spacing(10)
+                                .push(button::standard("Close").on_press(Message::CloseSSHSession(
+                                    self.ssh_sessions.first().unwrap().device_name.clone(),
+                                )))
+                                .spacing(10),
                         )
                         .push(self.active_sessions_view())
                         .spacing(10)
@@ -538,7 +742,7 @@ impl cosmic::Application for Window {
                 } else {
                     // If no SSH sessions, return an empty element
                     Column::new()
-                }
+                },
             )
             .spacing(10)
             .into()
@@ -598,23 +802,23 @@ impl Window {
         // Devices list with file send buttons
         let devices_list = {
             let mut col: Column<Message> = Column::new().spacing(5);
-            
+
             // Table header
             let header = row::row()
                 .push(
                     text("Device")
                         .size(self.ui_config.font_size)
-                        .width(Length::Fill)
+                        .width(Length::Fill),
                 )
                 .push(
                     text("Username")
                         .size(self.ui_config.font_size)
-                        .width(Length::Fill)
+                        .width(Length::Fill),
                 )
                 .push(
                     text("Actions")
                         .size(self.ui_config.font_size)
-                        .width(Length::Shrink)
+                        .width(Length::Shrink),
                 )
                 .spacing(10)
                 .padding(5);
@@ -627,25 +831,25 @@ impl Window {
                     .push(
                         text(dev.clone())
                             .size(self.ui_config.font_size)
-                            .width(Length::Fill)
+                            .width(Length::Fill),
                     )
                     .push(
                         text(username.clone())
                             .size(self.ui_config.font_size)
-                            .width(Length::Fill)
+                            .width(Length::Fill),
                     )
                     .push(
                         row::row()
                             .push(
                                 button::standard("Send Files")
-                                    .on_press(Message::OpenFileDialogToSend(dev.clone()))
+                                    .on_press(Message::OpenFileDialogToSend(dev.clone())),
                             )
                             .push(
                                 button::standard("SSH")
-                                    .on_press(Message::OpenSSHSession(dev.clone(), ip.clone()))
+                                    .on_press(Message::OpenSSHSession(dev.clone(), ip.clone())),
                             )
                             .spacing(5)
-                            .width(Length::Shrink)
+                            .width(Length::Shrink),
                     )
                     .spacing(10)
                     .padding(5)
@@ -654,8 +858,7 @@ impl Window {
             }
 
             // Make the devices list scrollable
-            scrollable(devices_col)
-                .height(Length::FillPortion(1))
+            scrollable(devices_col).height(Length::FillPortion(1))
         };
 
         Column::new()
@@ -665,14 +868,10 @@ impl Window {
                     .push(ssh_toggle)
                     .push(accept_routes_toggle)
                     .push(receive_btn)
-                    .spacing(10)
+                    .spacing(10),
             )
-            .push(
-                text(format!("Tailscale IP: {}", ip_display)).size(self.ui_config.font_size)
-            )
-            .push(
-                text("Devices").size(self.ui_config.font_size + 2)
-            )
+            .push(text(format!("Tailscale IP: {}", ip_display)).size(self.ui_config.font_size))
+            .push(text("Devices").size(self.ui_config.font_size + 2))
             .push(devices_list)
             .spacing(20)
             .into()
@@ -686,7 +885,8 @@ impl Window {
             .on_toggle(|val| Message::ToggleIsExitNode(val));
 
         // If we are an exit node, we can't connect to another
-        let mut connect_to_lan_toggle = toggler(self.tailscale_status.allow_lan).label("Connect to LAN");
+        let mut connect_to_lan_toggle =
+            toggler(self.tailscale_status.allow_lan).label("Connect to LAN");
         if self.tailscale_status.is_exit_node {
             connect_to_lan_toggle = toggler(self.tailscale_status.allow_lan)
                 .label("Connect to LAN")
@@ -715,29 +915,58 @@ impl Window {
                 button::standard(btn_label).padding(5)
             };
 
-            node_list_col = node_list_col
-                .push(
-                    row::row()
-                        .push(text(label).size(self.ui_config.font_size))
-                        .push(connect_btn)
-                );
+            node_list_col = node_list_col.push(
+                row::row()
+                    .push(text(label).size(self.ui_config.font_size))
+                    .push(connect_btn),
+            );
         }
 
         let exit_col: Element<Message> = Column::new()
-        .push(
-            row::row()
-                .push(is_exit_node_toggle)
-                .push(connect_to_lan_toggle)
-                .spacing(10)
-        )
-        .push(text("Exit Nodes").size(self.ui_config.font_size + 2))
-        .push(scrollable(node_list_col).height(Length::FillPortion(1)))
-        .spacing(20)
-        .into();
+            .push(
+                row::row()
+                    .push(is_exit_node_toggle)
+                    .push(connect_to_lan_toggle)
+                    .spacing(10),
+            )
+            .push(text("Exit Nodes").size(self.ui_config.font_size + 2))
+            .push(
+                container(scrollable(node_list_col).height(Length::FillPortion(1)))
+                    .style(|theme| {
+                        let component_color = cosmic::iced::Color::from(
+                            theme.cosmic().background.component.base.color,
+                        );
+                        cosmic::iced::widget::container::Style {
+                            background: Some(cosmic::iced::Background::Color(component_color)),
+                            border: cosmic::iced::Border {
+                                color: component_color,
+                                width: 1.0,
+                                radius: 4.0.into(),
+                            },
+                            ..Default::default()
+                        }
+                    })
+                    .padding(10),
+            )
+            .spacing(20)
+            .into();
 
         container(exit_col)
             .width(Length::Fill)
             .height(Length::Fill)
+            .style(|theme| {
+                let component_color =
+                    cosmic::iced::Color::from(theme.cosmic().background.component.base.color);
+                cosmic::iced::widget::container::Style {
+                    background: Some(cosmic::iced::Background::Color(component_color)),
+                    border: cosmic::iced::Border {
+                        color: component_color,
+                        width: 3.0,
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
             .into()
     }
 
@@ -756,7 +985,9 @@ impl Window {
 
         let theme_picker = dropdown(
             &AppTheme::ALL,
-            AppTheme::ALL.iter().position(|&theme| theme == current_theme),
+            AppTheme::ALL
+                .iter()
+                .position(|&theme| theme == current_theme),
             |index| Message::ThemeSelected(AppTheme::ALL[index]),
         );
 
@@ -779,46 +1010,54 @@ impl Window {
                 .label("Disable Received File Notifications")
                 .on_toggle(|val| Message::ToggleDisableRecievedFileNotifications(val));
 
-        let update_check_btn = button::standard("Check for Updates").on_press(Message::CheckForUpdates);
+        let update_check_btn =
+            button::standard("Check for Updates").on_press(Message::CheckForUpdates);
 
         let settings_col: Element<Message> = Column::new()
-        .push(
-            row::row()
-                .push(
-                    text("Font Size: ")
-                        .size(self.ui_config.font_size)
-                )
-                .push(font_slider)
-                .spacing(10)
-        )
-        .push(
-            row::row()
-                .push(text("Theme: ").size(self.ui_config.font_size))
-                .push(theme_picker)
-                .spacing(10)
-        )
-        .push(
-            row::row()
-                .push(notifications_toggle)
-                .push(sounds_toggle)
-                .spacing(10)
-        )
-        .push(
-            row::row()
-                .push(auto_receive_toggle)
-                .push(disable_file_notif)
-                .spacing(10)
-        )
-        .push(
-            button::standard("Check for Updates")
-                .on_press(Message::CheckForUpdates)
-        )
-        .spacing(20)
-        .into();
+            .push(
+                row::row()
+                    .push(text("Font Size: ").size(self.ui_config.font_size))
+                    .push(font_slider)
+                    .spacing(10),
+            )
+            .push(
+                row::row()
+                    .push(text("Theme: ").size(self.ui_config.font_size))
+                    .push(theme_picker)
+                    .spacing(10),
+            )
+            .push(
+                row::row()
+                    .push(notifications_toggle)
+                    .push(sounds_toggle)
+                    .spacing(10),
+            )
+            .push(
+                row::row()
+                    .push(auto_receive_toggle)
+                    .push(disable_file_notif)
+                    .spacing(10),
+            )
+            .push(button::standard("Check for Updates").on_press(Message::CheckForUpdates))
+            .spacing(20)
+            .into();
 
         container(settings_col)
             .width(Length::Fill)
             .height(Length::Fill)
+            .style(|theme| {
+                let component_color =
+                    cosmic::iced::Color::from(theme.cosmic().background.component.base.color);
+                cosmic::iced::widget::container::Style {
+                    background: Some(cosmic::iced::Background::Color(component_color)),
+                    border: cosmic::iced::Border {
+                        color: component_color,
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    ..Default::default()
+                }
+            })
             .into()
     }
 
@@ -826,52 +1065,53 @@ impl Window {
     fn active_sessions_view(&self) -> Element<Message> {
         if self.ssh_sessions.is_empty() {
             return Column::new()
-                .push(
-                    text("No Active SSH Sessions")
-                        .size(self.ui_config.font_size)
-                )
+                .push(text("No Active SSH Sessions").size(self.ui_config.font_size))
                 .into();
         }
-
-        let mut sessions_content = Column::new().spacing(10);
 
         // Tabs for each SSH session
         let mut sessions_tabs = row::row().spacing(10);
         for session in &self.ssh_sessions {
-            sessions_tabs = sessions_tabs
-                .push(
-                    container(
-                        row::row()
-                            .push(text(&session.device_name).size(self.ui_config.font_size))
-                            .push(
-                                button::standard("X")
-                                    .on_press(Message::CloseSSHSession(session.device_name.clone()))
-                            )
-                            .spacing(5)
-                    )
-                    .padding(5)
+            sessions_tabs =
+                sessions_tabs.push(
+                    Column::new()
+                        .push(
+                            row::row()
+                                .push(text(&session.device_name).size(self.ui_config.font_size))
+                                .push(button::standard("X").on_press(Message::CloseSSHSession(
+                                    session.device_name.clone(),
+                                )))
+                                .spacing(5),
+                        )
+                        .padding(5),
                 );
         }
 
         // Content for the active session
-        let active_session_content = if let Some(session) = self.ssh_sessions.iter().find(|s| s.active) {
+        let active_session_content: Element<Message> = if let Some(session) =
+            self.ssh_sessions.iter().find(|s| s.active)
+        {
             let mut output_column = Column::new().spacing(5);
-            
+
             // Add Tailscale CLI output
-            let tailscale_output = run_command("tailscale status").unwrap_or_else(|_| "Failed to get Tailscale status".to_string());
+            let tailscale_output = run_command("tailscale status")
+                .unwrap_or_else(|_| "Failed to get Tailscale status".to_string());
             output_column = output_column
                 .push(text("Tailscale Status:").size(self.ui_config.font_size + 2))
                 .push(text(tailscale_output).size(self.ui_config.font_size));
 
-            // Existing session output
-            for line in &session.output_lines {
-                output_column = output_column.push(text(line).size(self.ui_config.font_size));
+            if let Some(terminal) = &session.terminal {
+                for line in &terminal.content {
+                    output_column = output_column.push(text(line).size(self.ui_config.font_size));
+                }
             }
 
             // SSH command input
             let input = text_input(
                 "Enter SSH command",
-                self.ssh_input.get(&session.device_name).unwrap_or(&String::new())
+                self.ssh_input
+                    .get(&session.device_name)
+                    .unwrap_or(&String::new()),
             )
             .on_input(|text| Message::UpdateSSHInput(session.device_name.clone(), text))
             .on_submit(Message::SendSSHCommand(session.device_name.clone()));
@@ -880,20 +1120,27 @@ impl Window {
                 .push(input)
                 .push(
                     button::standard("Send Command")
-                        .on_press(Message::SendSSHCommand(session.device_name.clone()))
+                        .on_press(Message::SendSSHCommand(session.device_name.clone())),
                 )
+                .into()
         } else {
             Column::new()
-                .push(
-                    text("Select an SSH session to view details")
-                        .size(self.ui_config.font_size)
-                )
+                .push(text("Select an SSH session to view details").size(self.ui_config.font_size))
+                .into()
         };
 
-        sessions_content
+        Column::new()
             .push(sessions_tabs)
             .push(active_session_content)
             .into()
+    }
+}
+
+fn terminal_style() -> impl FnOnce(&cosmic::Theme) -> cosmic::iced::widget::container::Style {
+    |_theme| cosmic::iced::widget::container::Style {
+        background: Some(cosmic::iced::Background::Color(cosmic::iced::Color::BLACK)),
+        text_color: Some(cosmic::iced::Color::WHITE),
+        ..Default::default()
     }
 }
 
